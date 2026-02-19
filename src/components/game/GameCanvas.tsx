@@ -10,6 +10,16 @@ import { useEffect, useRef, useCallback } from "react";
 
 export type GameState = "menu" | "playing" | "paused" | "gameover";
 
+export interface GameAudioCallbacks {
+  sfxShoot: () => void;
+  sfxHit: () => void;
+  sfxExplode: (big?: boolean) => void;
+  sfxDamage: () => void;
+  sfxLevelUp: () => void;
+  sfxGameOver: () => void;
+  sfxEnemyShoot: () => void;
+}
+
 interface GameCanvasProps {
   gameState: GameState;
   onScoreChange: (score: number) => void;
@@ -17,6 +27,7 @@ interface GameCanvasProps {
   onLevelChange: (level: number) => void;
   onGameOver: (finalScore: number) => void;
   onStateChange: (state: GameState) => void;
+  audio?: GameAudioCallbacks;
 }
 
 // ── Entity types ──────────────────────────────────────────────
@@ -77,7 +88,7 @@ function circRect(cx: number, cy: number, r: number,
 
 export default function GameCanvas({
   gameState, onScoreChange, onLivesChange,
-  onLevelChange, onGameOver, onStateChange,
+  onLevelChange, onGameOver, onStateChange, audio,
 }: GameCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rafRef    = useRef<number>(0);
@@ -230,6 +241,7 @@ export default function GameCanvas({
         w.bullets.push({ pos: { x: cx - 14, y: cy + 10 }, vel: { x: -40, y: -700 }, radius: 3, owner: "player", damage: 1, life: 2 });
         w.bullets.push({ pos: { x: cx + 10, y: cy + 10 }, vel: { x: 40,  y: -700 }, radius: 3, owner: "player", damage: 1, life: 2 });
       }
+      audio?.sfxShoot();
     }
 
     // ── Enemy spawning ──
@@ -253,6 +265,7 @@ export default function GameCanvas({
         e.shootTimer += dt;
         if (e.shootTimer >= e.shootInterval) {
           e.shootTimer = 0;
+          audio?.sfxEnemyShoot();
           const cx = e.pos.x + e.width / 2;
           const cy = e.pos.y + e.height;
           // Aim at player
@@ -276,9 +289,11 @@ export default function GameCanvas({
         p.invincible = 2.5;
         w.lives -= 1;
         w.shake = 1;
+        audio?.sfxDamage();
         onLivesChange(w.lives);
         w.floats.push({ pos: { x: p.pos.x + p.width / 2, y: p.pos.y }, text: "HIT!", color: RED, life: 1, maxLife: 1 });
         if (w.lives <= 0) {
+          audio?.sfxGameOver();
           onGameOver(w.score);
           return;
         }
@@ -302,11 +317,13 @@ export default function GameCanvas({
           if (circRect(b.pos.x, b.pos.y, b.radius, e.pos.x, e.pos.y, e.width, e.height)) {
             e.hp -= b.damage;
             explode(b.pos.x, b.pos.y, CYAN, 6);
+            audio?.sfxHit();
             w.bullets.splice(i, 1);
             if (e.hp <= 0) {
               const pts = e.points * w.level;
               w.score += pts;
               onScoreChange(w.score);
+              audio?.sfxExplode(e.type === 2);
               explode(e.pos.x + e.width / 2, e.pos.y + e.height / 2,
                       e.type === 2 ? MAGENTA : e.type === 1 ? GOLD : CYAN, 22);
               w.floats.push({ pos: { x: e.pos.x + e.width / 2, y: e.pos.y },
@@ -317,6 +334,7 @@ export default function GameCanvas({
               if (w.wave % 12 === 0) {
                 w.level++;
                 onLevelChange(w.level);
+                audio?.sfxLevelUp();
                 w.floats.push({ pos: { x: W / 2, y: H / 2 }, text: `LEVEL ${w.level}!`, color: GREEN, life: 2, maxLife: 2 });
               }
             }
@@ -331,10 +349,11 @@ export default function GameCanvas({
           p.invincible = 2.5;
           w.lives -= 1;
           w.shake = 0.7;
+          audio?.sfxDamage();
           onLivesChange(w.lives);
           explode(p.pos.x + p.width / 2, p.pos.y + p.height / 2, RED, 14);
           w.floats.push({ pos: { x: p.pos.x + p.width / 2, y: p.pos.y }, text: "HIT!", color: RED, life: 1, maxLife: 1 });
-          if (w.lives <= 0) { onGameOver(w.score); return; }
+          if (w.lives <= 0) { audio?.sfxGameOver(); onGameOver(w.score); return; }
         }
       }
     }
