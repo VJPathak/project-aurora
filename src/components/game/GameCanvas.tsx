@@ -2,10 +2,6 @@ import { useEffect, useRef, useCallback } from "react";
 
 /* ================================================================
    SPACE SHOOTER — GAME ENGINE
-   Architecture mirrors a classic C++ game loop:
-     - init()      → setup entities
-     - update(dt)  → physics, AI, collisions
-     - render()    → draw everything to canvas
    ================================================================ */
 
 export type GameState = "menu" | "playing" | "paused" | "gameover";
@@ -93,8 +89,20 @@ export default function GameCanvas({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rafRef    = useRef<number>(0);
   const lastTime  = useRef<number>(0);
+  const initialized = useRef(false);
 
-  // Mutable game world (not React state — performance critical)
+  // Use refs for callbacks to avoid recreating update/loop
+  const cbRef = useRef({ onScoreChange, onLivesChange, onLevelChange, onGameOver, audio });
+  cbRef.current = { onScoreChange, onLivesChange, onLevelChange, onGameOver, audio };
+
+  // Touch controls state
+  const touchRef = useRef({
+    joystick: null as { id: number; startX: number; startY: number; curX: number; curY: number } | null,
+    firing: false,
+    fireId: null as number | null,
+  });
+
+  // Mutable game world
   const world = useRef({
     player:   null as Player | null,
     bullets:  [] as Bullet[],
@@ -144,7 +152,6 @@ export default function GameCanvas({
     w.shake    = 0;
     w.time     = 0;
 
-    // Generate starfield
     w.stars = Array.from({ length: 180 }, () => ({
       pos: { x: Math.random() * W, y: Math.random() * H },
       speed: 0.3 + Math.random() * 2,
@@ -152,10 +159,10 @@ export default function GameCanvas({
       alpha: 0.3 + Math.random() * 0.7,
     }));
 
-    onScoreChange(0);
-    onLivesChange(3);
-    onLevelChange(1);
-  }, [onScoreChange, onLivesChange, onLevelChange]);
+    cbRef.current.onScoreChange(0);
+    cbRef.current.onLivesChange(3);
+    cbRef.current.onLevelChange(1);
+  }, []);
 
   // ── Spawn enemy ────────────────────────────────────────────
   const spawnEnemy = useCallback((canvas: HTMLCanvasElement) => {
@@ -165,13 +172,10 @@ export default function GameCanvas({
     const type = Math.random() < 0.15 + lvl * 0.05 ? 2 : Math.random() < 0.3 ? 1 : 0;
 
     const configs = [
-      // type 0 — grunt
       { width: 36, height: 36, hp: 1 + Math.floor(lvl * 0.5), speed: 60 + lvl * 8,
         sinAmp: 30 + Math.random() * 40, sinSpeed: 1.5, shootInterval: 3.5, points: 100 },
-      // type 1 — fast zigzag
       { width: 30, height: 32, hp: 1, speed: 110 + lvl * 10,
         sinAmp: 80 + Math.random() * 50, sinSpeed: 3.5, shootInterval: 99, points: 150 },
-      // type 2 — tank / shooter
       { width: 50, height: 50, hp: 3 + Math.floor(lvl * 0.8), speed: 40 + lvl * 5,
         sinAmp: 15, sinSpeed: 0.8, shootInterval: 2.0, points: 250 },
     ];
@@ -210,29 +214,46 @@ export default function GameCanvas({
   const update = useCallback((dt: number, canvas: HTMLCanvasElement) => {
     const w = world.current;
     const W = canvas.width, H = canvas.height;
+    const cb = cbRef.current;
+    const aud = cb.audio;
     if (!w.player) return;
     const p = w.player;
 
     w.time += dt;
     w.shake = Math.max(0, w.shake - dt * 8);
 
-    // ── Player movement ──
+    // ── Player movement (keyboard + touch joystick) ──
     p.thrusterPhase += dt * 10;
     const spd = p.speed * dt;
-    if ((w.keys["ArrowLeft"] || w.keys["a"] || w.keys["A"]) && p.pos.x > 0)
-      p.pos.x = Math.max(0, p.pos.x - spd);
-    if ((w.keys["ArrowRight"] || w.keys["d"] || w.keys["D"]) && p.pos.x + p.width < W)
-      p.pos.x = Math.min(W - p.width, p.pos.x + spd);
-    if ((w.keys["ArrowUp"] || w.keys["w"] || w.keys["W"]) && p.pos.y > 0)
-      p.pos.y = Math.max(0, p.pos.y - spd);
-    if ((w.keys["ArrowDown"] || w.keys["s"] || w.keys["S"]) && p.pos.y + p.height < H)
-      p.pos.y = Math.min(H - p.height, p.pos.y + spd);
+
+    // Touch joystick input
+    const touch = touchRef.current;
+    let moveX = 0, moveY = 0;
+    if (touch.joystick) {
+      const dx = touch.joystick.curX - touch.joystick.startX;
+      const dy = touch.joystick.curY - touch.joystick.startY;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const maxDist = 50;
+      if (dist > 5) {
+        moveX = (dx / Math.max(dist, maxDist));
+        moveY = (dy / Math.max(dist, maxDist));
+      }
+    }
+
+    if ((w.keys["ArrowLeft"] || w.keys["a"] || w.keys["A"] || moveX < -0.1) && p.pos.x > 0)
+      p.pos.x = Math.max(0, p.pos.x - spd * (moveX < -0.1 ? Math.abs(moveX) : 1));
+    if ((w.keys["ArrowRight"] || w.keys["d"] || w.keys["D"] || moveX > 0.1) && p.pos.x + p.width < W)
+      p.pos.x = Math.min(W - p.width, p.pos.x + spd * (moveX > 0.1 ? moveX : 1));
+    if ((w.keys["ArrowUp"] || w.keys["w"] || w.keys["W"] || moveY < -0.1) && p.pos.y > 0)
+      p.pos.y = Math.max(0, p.pos.y - spd * (moveY < -0.1 ? Math.abs(moveY) : 1));
+    if ((w.keys["ArrowDown"] || w.keys["s"] || w.keys["S"] || moveY > 0.1) && p.pos.y + p.height < H)
+      p.pos.y = Math.min(H - p.height, p.pos.y + spd * (moveY > 0.1 ? moveY : 1));
 
     p.invincible = Math.max(0, p.invincible - dt);
 
-    // ── Player shoot ──
+    // ── Player shoot (keyboard or touch fire button) ──
     w.shootCooldown = Math.max(0, w.shootCooldown - dt);
-    if (w.keys[" "] && w.shootCooldown <= 0) {
+    if ((w.keys[" "] || touch.firing) && w.shootCooldown <= 0) {
       w.shootCooldown = 0.18;
       const cx = p.pos.x + p.width / 2;
       const cy = p.pos.y;
@@ -241,7 +262,7 @@ export default function GameCanvas({
         w.bullets.push({ pos: { x: cx - 14, y: cy + 10 }, vel: { x: -40, y: -700 }, radius: 3, owner: "player", damage: 1, life: 2 });
         w.bullets.push({ pos: { x: cx + 10, y: cy + 10 }, vel: { x: 40,  y: -700 }, radius: 3, owner: "player", damage: 1, life: 2 });
       }
-      audio?.sfxShoot();
+      aud?.sfxShoot();
     }
 
     // ── Enemy spawning ──
@@ -260,15 +281,13 @@ export default function GameCanvas({
       e.pos.x += Math.sin(w.time * e.sinSpeed + e.sinOffset) * e.sinAmp * dt;
       e.pos.x = Math.max(0, Math.min(W - e.width, e.pos.x));
 
-      // Enemy shoot
       if (e.shootInterval < 90) {
         e.shootTimer += dt;
         if (e.shootTimer >= e.shootInterval) {
           e.shootTimer = 0;
-          audio?.sfxEnemyShoot();
+          aud?.sfxEnemyShoot();
           const cx = e.pos.x + e.width / 2;
           const cy = e.pos.y + e.height;
-          // Aim at player
           const dx = (p.pos.x + p.width / 2) - cx;
           const dy = (p.pos.y + p.height / 2) - cy;
           const len = Math.sqrt(dx * dx + dy * dy) || 1;
@@ -277,7 +296,6 @@ export default function GameCanvas({
         }
       }
 
-      // Off screen
       if (e.pos.y > H + 60) { w.enemies.splice(i, 1); continue; }
 
       // Player collision
@@ -289,12 +307,12 @@ export default function GameCanvas({
         p.invincible = 2.5;
         w.lives -= 1;
         w.shake = 1;
-        audio?.sfxDamage();
-        onLivesChange(w.lives);
+        aud?.sfxDamage();
+        cb.onLivesChange(w.lives);
         w.floats.push({ pos: { x: p.pos.x + p.width / 2, y: p.pos.y }, text: "HIT!", color: RED, life: 1, maxLife: 1 });
         if (w.lives <= 0) {
-          audio?.sfxGameOver();
-          onGameOver(w.score);
+          aud?.sfxGameOver();
+          cb.onGameOver(w.score);
           return;
         }
       }
@@ -317,24 +335,23 @@ export default function GameCanvas({
           if (circRect(b.pos.x, b.pos.y, b.radius, e.pos.x, e.pos.y, e.width, e.height)) {
             e.hp -= b.damage;
             explode(b.pos.x, b.pos.y, CYAN, 6);
-            audio?.sfxHit();
+            aud?.sfxHit();
             w.bullets.splice(i, 1);
             if (e.hp <= 0) {
               const pts = e.points * w.level;
               w.score += pts;
-              onScoreChange(w.score);
-              audio?.sfxExplode(e.type === 2);
+              cb.onScoreChange(w.score);
+              aud?.sfxExplode(e.type === 2);
               explode(e.pos.x + e.width / 2, e.pos.y + e.height / 2,
                       e.type === 2 ? MAGENTA : e.type === 1 ? GOLD : CYAN, 22);
               w.floats.push({ pos: { x: e.pos.x + e.width / 2, y: e.pos.y },
                 text: `+${pts}`, color: GOLD, life: 1.2, maxLife: 1.2 });
               w.enemies.splice(j, 1);
               w.wave++;
-              // Level up every 12 kills
               if (w.wave % 12 === 0) {
                 w.level++;
-                onLevelChange(w.level);
-                audio?.sfxLevelUp();
+                cb.onLevelChange(w.level);
+                aud?.sfxLevelUp();
                 w.floats.push({ pos: { x: W / 2, y: H / 2 }, text: `LEVEL ${w.level}!`, color: GREEN, life: 2, maxLife: 2 });
               }
             }
@@ -342,18 +359,17 @@ export default function GameCanvas({
           }
         }
       } else {
-        // Enemy bullet → player
         if (p.invincible <= 0 &&
             circRect(b.pos.x, b.pos.y, b.radius, p.pos.x, p.pos.y, p.width, p.height)) {
           w.bullets.splice(i, 1);
           p.invincible = 2.5;
           w.lives -= 1;
           w.shake = 0.7;
-          audio?.sfxDamage();
-          onLivesChange(w.lives);
+          aud?.sfxDamage();
+          cb.onLivesChange(w.lives);
           explode(p.pos.x + p.width / 2, p.pos.y + p.height / 2, RED, 14);
           w.floats.push({ pos: { x: p.pos.x + p.width / 2, y: p.pos.y }, text: "HIT!", color: RED, life: 1, maxLife: 1 });
-          if (w.lives <= 0) { audio?.sfxGameOver(); onGameOver(w.score); return; }
+          if (w.lives <= 0) { aud?.sfxGameOver(); cb.onGameOver(w.score); return; }
         }
       }
     }
@@ -384,7 +400,7 @@ export default function GameCanvas({
       star.pos.y += star.speed * dt * (30 + w.level * 2);
       if (star.pos.y > H) { star.pos.y = 0; star.pos.x = Math.random() * W; }
     }
-  }, [spawnEnemy, explode, onScoreChange, onLivesChange, onLevelChange, onGameOver]);
+  }, [spawnEnemy, explode]);
 
   // ── Render ─────────────────────────────────────────────────
   const render = useCallback((canvas: HTMLCanvasElement) => {
@@ -395,17 +411,14 @@ export default function GameCanvas({
     const p = w.player;
 
     ctx.save();
-    // Screen shake
     if (w.shake > 0) {
       const mag = w.shake * 8;
       ctx.translate((Math.random() - 0.5) * mag, (Math.random() - 0.5) * mag);
     }
 
-    // ── Background ──
     ctx.fillStyle = "#040a14";
     ctx.fillRect(0, 0, W, H);
 
-    // Stars
     for (const star of w.stars) {
       ctx.save();
       ctx.globalAlpha = star.alpha;
@@ -416,7 +429,6 @@ export default function GameCanvas({
       ctx.restore();
     }
 
-    // ── Particles ──
     for (const pt of w.particles) {
       ctx.save();
       ctx.globalAlpha = pt.alpha;
@@ -429,7 +441,6 @@ export default function GameCanvas({
       ctx.restore();
     }
 
-    // ── Enemy bullets ──
     for (const b of w.bullets) {
       if (b.owner !== "enemy") continue;
       ctx.save();
@@ -439,7 +450,6 @@ export default function GameCanvas({
       ctx.beginPath();
       ctx.arc(b.pos.x, b.pos.y, b.radius, 0, Math.PI * 2);
       ctx.fill();
-      // trail
       ctx.globalAlpha = 0.3;
       ctx.fillStyle = "#ff8888";
       ctx.beginPath();
@@ -448,13 +458,11 @@ export default function GameCanvas({
       ctx.restore();
     }
 
-    // ── Player bullets ──
     for (const b of w.bullets) {
       if (b.owner !== "player") continue;
       ctx.save();
       ctx.shadowColor = CYAN;
       ctx.shadowBlur = 16;
-      // laser rod
       ctx.strokeStyle = CYAN;
       ctx.lineWidth = b.radius * 2;
       ctx.lineCap = "round";
@@ -469,7 +477,6 @@ export default function GameCanvas({
       ctx.restore();
     }
 
-    // ── Enemies ──
     const drawEnemy = (e: Enemy) => {
       const cx = e.pos.x + e.width / 2, cy = e.pos.y + e.height / 2;
       const colors = [MAGENTA, GOLD, RED];
@@ -479,7 +486,6 @@ export default function GameCanvas({
       ctx.shadowBlur = 18;
 
       if (e.type === 0) {
-        // Grunt — diamond
         ctx.fillStyle = color;
         ctx.beginPath();
         ctx.moveTo(cx, e.pos.y);
@@ -492,7 +498,6 @@ export default function GameCanvas({
         ctx.lineWidth = 1;
         ctx.stroke();
       } else if (e.type === 1) {
-        // Fast — triangle pointing down
         ctx.fillStyle = color;
         ctx.beginPath();
         ctx.moveTo(cx, e.pos.y + e.height);
@@ -501,7 +506,6 @@ export default function GameCanvas({
         ctx.closePath();
         ctx.fill();
       } else {
-        // Tank — hexagon
         ctx.fillStyle = color + "aa";
         ctx.strokeStyle = color;
         ctx.lineWidth = 2.5;
@@ -517,7 +521,6 @@ export default function GameCanvas({
         ctx.stroke();
       }
 
-      // HP bar
       if (e.maxHp > 1) {
         const bw = e.width, bh = 4;
         const bx = e.pos.x, by = e.pos.y - 10;
@@ -543,7 +546,6 @@ export default function GameCanvas({
     ctx.shadowColor = CYAN;
     ctx.shadowBlur = 22;
 
-    // Thruster flame
     const flameH = 12 + Math.sin(p.thrusterPhase) * 8;
     const grad = ctx.createLinearGradient(pcx, py + ph, pcx, py + ph + flameH + 10);
     grad.addColorStop(0, CYAN + "ff");
@@ -557,24 +559,22 @@ export default function GameCanvas({
     ctx.closePath();
     ctx.fill();
 
-    // Main hull
     ctx.fillStyle = "#0d1f2d";
     ctx.strokeStyle = CYAN;
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.moveTo(pcx, py);                       // nose
+    ctx.moveTo(pcx, py);
     ctx.lineTo(px + pw * 0.85, py + ph * 0.7);
-    ctx.lineTo(px + pw, py + ph);              // right wing tip
+    ctx.lineTo(px + pw, py + ph);
     ctx.lineTo(px + pw * 0.6, py + ph * 0.75);
-    ctx.lineTo(pcx, py + ph * 0.65);           // cockpit rear
+    ctx.lineTo(pcx, py + ph * 0.65);
     ctx.lineTo(px + pw * 0.4, py + ph * 0.75);
-    ctx.lineTo(px, py + ph);                   // left wing tip
+    ctx.lineTo(px, py + ph);
     ctx.lineTo(px + pw * 0.15, py + ph * 0.7);
     ctx.closePath();
     ctx.fill();
     ctx.stroke();
 
-    // Cockpit
     const cpGrad = ctx.createRadialGradient(pcx, py + ph * 0.3, 2, pcx, py + ph * 0.3, 12);
     cpGrad.addColorStop(0, "#00f5ff88");
     cpGrad.addColorStop(1, "transparent");
@@ -586,7 +586,6 @@ export default function GameCanvas({
     ctx.lineWidth = 1;
     ctx.stroke();
 
-    // Gun ports
     ctx.fillStyle = CYAN;
     ctx.shadowBlur = 8;
     ctx.beginPath(); ctx.arc(px + pw * 0.15, py + ph * 0.65, 3, 0, Math.PI * 2); ctx.fill();
@@ -609,18 +608,65 @@ export default function GameCanvas({
       ctx.restore();
     }
 
+    // ── Mobile touch controls overlay ──
+    const touch = touchRef.current;
+    if (touch.joystick) {
+      // Joystick base
+      ctx.save();
+      ctx.globalAlpha = 0.2;
+      ctx.strokeStyle = CYAN;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(touch.joystick.startX, touch.joystick.startY, 50, 0, Math.PI * 2);
+      ctx.stroke();
+      // Joystick knob
+      ctx.globalAlpha = 0.5;
+      ctx.fillStyle = CYAN;
+      const dx = touch.joystick.curX - touch.joystick.startX;
+      const dy = touch.joystick.curY - touch.joystick.startY;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const maxD = 50;
+      const clampedX = dist > maxD ? touch.joystick.startX + (dx / dist) * maxD : touch.joystick.curX;
+      const clampedY = dist > maxD ? touch.joystick.startY + (dy / dist) * maxD : touch.joystick.curY;
+      ctx.beginPath();
+      ctx.arc(clampedX, clampedY, 18, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // Fire button (always show on touch devices)
+    if ("ontouchstart" in window) {
+      ctx.save();
+      const fbx = W - 70, fby = H - 100, fbr = 35;
+      ctx.globalAlpha = touch.firing ? 0.6 : 0.25;
+      ctx.fillStyle = RED;
+      ctx.shadowColor = RED;
+      ctx.shadowBlur = touch.firing ? 20 : 8;
+      ctx.beginPath();
+      ctx.arc(fbx, fby, fbr, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = touch.firing ? 1 : 0.6;
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 14px 'Orbitron', monospace";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("FIRE", fbx, fby);
+      ctx.restore();
+    }
+
     ctx.restore(); // shake restore
   }, []);
 
-  // ── Game loop ───────────────────────────────────────────────
-  const loop = useCallback((timestamp: number) => {
+  // ── Game loop (stable — no callback deps) ──────────────────
+  const loopRef = useRef<(timestamp: number) => void>();
+  loopRef.current = (timestamp: number) => {
     if (!canvasRef.current) return;
     const dt = Math.min((timestamp - lastTime.current) / 1000, 0.05);
     lastTime.current = timestamp;
     update(dt, canvasRef.current);
     render(canvasRef.current);
-    rafRef.current = requestAnimationFrame(loop);
-  }, [update, render]);
+    rafRef.current = requestAnimationFrame(loopRef.current!);
+  };
 
   // ── Effect: start / stop based on gameState ────────────────
   useEffect(() => {
@@ -628,15 +674,21 @@ export default function GameCanvas({
     if (!canvas) return;
 
     if (gameState === "playing") {
-      init(canvas);
+      if (!initialized.current) {
+        init(canvas);
+        initialized.current = true;
+      }
       lastTime.current = performance.now();
-      rafRef.current = requestAnimationFrame(loop);
+      rafRef.current = requestAnimationFrame(loopRef.current!);
     } else {
       cancelAnimationFrame(rafRef.current);
+      if (gameState === "menu" || gameState === "gameover") {
+        initialized.current = false;
+      }
     }
 
     return () => { cancelAnimationFrame(rafRef.current); };
-  }, [gameState, init, loop]);
+  }, [gameState, init]);
 
   // ── Keyboard ────────────────────────────────────────────────
   useEffect(() => {
@@ -652,6 +704,74 @@ export default function GameCanvas({
     window.addEventListener("keyup", up);
     return () => { window.removeEventListener("keydown", down); window.removeEventListener("keyup", up); };
   }, [gameState, onStateChange]);
+
+  // ── Touch controls ─────────────────────────────────────────
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const handleTouchStart = (e: TouchEvent) => {
+      e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      const W = canvas.width;
+
+      for (let i = 0; i < e.changedTouches.length; i++) {
+        const t = e.changedTouches[i];
+        const x = (t.clientX - rect.left) * (canvas.width / rect.width);
+        const y = (t.clientY - rect.top) * (canvas.height / rect.height);
+
+        // Right side = fire button
+        if (x > W * 0.6) {
+          touchRef.current.firing = true;
+          touchRef.current.fireId = t.identifier;
+        } else {
+          // Left side = joystick
+          touchRef.current.joystick = {
+            id: t.identifier,
+            startX: x, startY: y,
+            curX: x, curY: y,
+          };
+        }
+      }
+    };
+
+    const handleTouchMove = (e: TouchEvent) => {
+      e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      for (let i = 0; i < e.changedTouches.length; i++) {
+        const t = e.changedTouches[i];
+        if (touchRef.current.joystick && t.identifier === touchRef.current.joystick.id) {
+          touchRef.current.joystick.curX = (t.clientX - rect.left) * (canvas.width / rect.width);
+          touchRef.current.joystick.curY = (t.clientY - rect.top) * (canvas.height / rect.height);
+        }
+      }
+    };
+
+    const handleTouchEnd = (e: TouchEvent) => {
+      for (let i = 0; i < e.changedTouches.length; i++) {
+        const t = e.changedTouches[i];
+        if (touchRef.current.joystick && t.identifier === touchRef.current.joystick.id) {
+          touchRef.current.joystick = null;
+        }
+        if (t.identifier === touchRef.current.fireId) {
+          touchRef.current.firing = false;
+          touchRef.current.fireId = null;
+        }
+      }
+    };
+
+    canvas.addEventListener("touchstart", handleTouchStart, { passive: false });
+    canvas.addEventListener("touchmove", handleTouchMove, { passive: false });
+    canvas.addEventListener("touchend", handleTouchEnd);
+    canvas.addEventListener("touchcancel", handleTouchEnd);
+
+    return () => {
+      canvas.removeEventListener("touchstart", handleTouchStart);
+      canvas.removeEventListener("touchmove", handleTouchMove);
+      canvas.removeEventListener("touchend", handleTouchEnd);
+      canvas.removeEventListener("touchcancel", handleTouchEnd);
+    };
+  }, []);
 
   // ── Resize ─────────────────────────────────────────────────
   useEffect(() => {
@@ -670,7 +790,7 @@ export default function GameCanvas({
     <canvas
       ref={canvasRef}
       className="w-full h-full block"
-      style={{ imageRendering: "pixelated" }}
+      style={{ imageRendering: "pixelated", touchAction: "none" }}
     />
   );
 }
