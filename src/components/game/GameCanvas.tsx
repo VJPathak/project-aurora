@@ -11,9 +11,10 @@ export interface GameAudioCallbacks {
   sfxHit: () => void;
   sfxExplode: (big?: boolean) => void;
   sfxDamage: () => void;
-  sfxLevelUp: () => void;
+  sfxLevelUp: (level?: number) => void;
   sfxGameOver: () => void;
   sfxEnemyShoot: () => void;
+  setMusicLevel?: (level: number) => void;
 }
 
 interface GameCanvasProps {
@@ -351,7 +352,8 @@ export default function GameCanvas({
               if (w.wave % 12 === 0) {
                 w.level++;
                 cb.onLevelChange(w.level);
-                aud?.sfxLevelUp();
+                aud?.sfxLevelUp(w.level);
+                aud?.setMusicLevel?.(w.level);
                 w.floats.push({ pos: { x: W / 2, y: H / 2 }, text: `LEVEL ${w.level}!`, color: GREEN, life: 2, maxLife: 2 });
               }
             }
@@ -483,58 +485,116 @@ export default function GameCanvas({
       const color = colors[e.type];
       ctx.save();
       ctx.shadowColor = color;
-      ctx.shadowBlur = 18;
+      ctx.shadowBlur = 22;
+
+      // Pulsing glow
+      const pulse = 0.7 + Math.sin(w.time * 4 + e.sinOffset) * 0.3;
 
       if (e.type === 0) {
-        ctx.fillStyle = color;
-        ctx.beginPath();
-        ctx.moveTo(cx, e.pos.y);
-        ctx.lineTo(e.pos.x + e.width, cy);
-        ctx.lineTo(cx, e.pos.y + e.height);
-        ctx.lineTo(e.pos.x, cy);
-        ctx.closePath();
-        ctx.fill();
-        ctx.strokeStyle = "#ffffff44";
-        ctx.lineWidth = 1;
-        ctx.stroke();
-      } else if (e.type === 1) {
-        ctx.fillStyle = color;
-        ctx.beginPath();
-        ctx.moveTo(cx, e.pos.y + e.height);
-        ctx.lineTo(e.pos.x, e.pos.y);
-        ctx.lineTo(e.pos.x + e.width, e.pos.y);
-        ctx.closePath();
-        ctx.fill();
-      } else {
-        ctx.fillStyle = color + "aa";
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 2.5;
+        // GRUNT — rounded hexagon with inner eye
+        const r = e.width / 2;
+        const grad = ctx.createRadialGradient(cx, cy, r * 0.2, cx, cy, r);
+        grad.addColorStop(0, color);
+        grad.addColorStop(1, color + "44");
+        ctx.fillStyle = grad;
         ctx.beginPath();
         for (let i = 0; i < 6; i++) {
-          const ang = (Math.PI / 3) * i - Math.PI / 6;
-          const r = e.width / 2;
+          const ang = (Math.PI / 3) * i - Math.PI / 2;
+          const rr = r * (i % 2 === 0 ? 1 : 0.85);
+          if (i === 0) ctx.moveTo(cx + Math.cos(ang) * rr, cy + Math.sin(ang) * rr);
+          else ctx.lineTo(cx + Math.cos(ang) * rr, cy + Math.sin(ang) * rr);
+        }
+        ctx.closePath();
+        ctx.fill();
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        // Eye
+        ctx.fillStyle = "#fff";
+        ctx.beginPath();
+        ctx.arc(cx, cy, 5 * pulse, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (e.type === 1) {
+        // DART — sleek arrow shape with trail
+        const grad = ctx.createLinearGradient(cx, e.pos.y, cx, e.pos.y + e.height);
+        grad.addColorStop(0, color + "22");
+        grad.addColorStop(1, color);
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.moveTo(cx, e.pos.y + e.height + 6);
+        ctx.lineTo(e.pos.x + 4, e.pos.y + 4);
+        ctx.quadraticCurveTo(cx, e.pos.y - 4, e.pos.x + e.width - 4, e.pos.y + 4);
+        ctx.closePath();
+        ctx.fill();
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        // Thruster glow
+        ctx.globalAlpha = 0.4 * pulse;
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.ellipse(cx, e.pos.y - 2, 6, 3, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      } else {
+        // TANK — octagon with rotating shield ring
+        const r = e.width / 2;
+        const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+        grad.addColorStop(0, "#330000");
+        grad.addColorStop(0.6, color + "88");
+        grad.addColorStop(1, color);
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        for (let i = 0; i < 8; i++) {
+          const ang = (Math.PI / 4) * i - Math.PI / 8;
           if (i === 0) ctx.moveTo(cx + Math.cos(ang) * r, cy + Math.sin(ang) * r);
           else ctx.lineTo(cx + Math.cos(ang) * r, cy + Math.sin(ang) * r);
         }
         ctx.closePath();
         ctx.fill();
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2.5;
         ctx.stroke();
+        // Rotating shield segments
+        ctx.globalAlpha = 0.4;
+        for (let i = 0; i < 4; i++) {
+          const ang = w.time * 1.5 + (Math.PI / 2) * i;
+          ctx.beginPath();
+          ctx.arc(cx, cy, r + 5, ang, ang + 0.8);
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 3;
+          ctx.stroke();
+        }
+        ctx.globalAlpha = 1;
+        // Core
+        ctx.fillStyle = "#fff";
+        ctx.beginPath();
+        ctx.arc(cx, cy, 6 * pulse, 0, Math.PI * 2);
+        ctx.fill();
       }
 
+      // Health bar (rounded)
       if (e.maxHp > 1) {
-        const bw = e.width, bh = 4;
-        const bx = e.pos.x, by = e.pos.y - 10;
-        ctx.fillStyle = "#ffffff22";
-        ctx.fillRect(bx, by, bw, bh);
-        ctx.fillStyle = color;
-        ctx.fillRect(bx, by, bw * (e.hp / e.maxHp), bh);
+        const bw = e.width + 4, bh = 5;
+        const bx = e.pos.x - 2, by = e.pos.y - 12;
+        ctx.fillStyle = "#ffffff15";
+        ctx.beginPath();
+        ctx.roundRect(bx, by, bw, bh, 2);
+        ctx.fill();
+        const hpGrad = ctx.createLinearGradient(bx, by, bx + bw, by);
+        hpGrad.addColorStop(0, color);
+        hpGrad.addColorStop(1, "#fff");
+        ctx.fillStyle = hpGrad;
+        ctx.beginPath();
+        ctx.roundRect(bx, by, bw * (e.hp / e.maxHp), bh, 2);
+        ctx.fill();
       }
       ctx.restore();
     };
 
     for (const e of w.enemies) drawEnemy(e);
 
-    // ── Player ship ──
+    // ── Player ship (modern sleek design) ──
     const px = p.pos.x, py = p.pos.y;
     const pw = p.width, ph = p.height;
     const pcx = px + pw / 2;
@@ -544,52 +604,73 @@ export default function GameCanvas({
     if (inv) ctx.globalAlpha = 0.3;
 
     ctx.shadowColor = CYAN;
-    ctx.shadowBlur = 22;
+    ctx.shadowBlur = 28;
 
-    const flameH = 12 + Math.sin(p.thrusterPhase) * 8;
-    const grad = ctx.createLinearGradient(pcx, py + ph, pcx, py + ph + flameH + 10);
-    grad.addColorStop(0, CYAN + "ff");
-    grad.addColorStop(0.5, "#ff8800cc");
-    grad.addColorStop(1, "transparent");
-    ctx.fillStyle = grad;
-    ctx.beginPath();
-    ctx.moveTo(pcx - 8, py + ph - 4);
-    ctx.lineTo(pcx, py + ph + flameH + 10);
-    ctx.lineTo(pcx + 8, py + ph - 4);
-    ctx.closePath();
-    ctx.fill();
+    // Dual engine flames
+    const flameH = 14 + Math.sin(p.thrusterPhase) * 10;
+    const flameW = 7;
+    for (const ox of [-10, 10]) {
+      const fx = pcx + ox;
+      const fGrad = ctx.createLinearGradient(fx, py + ph, fx, py + ph + flameH + 14);
+      fGrad.addColorStop(0, "#ffffff");
+      fGrad.addColorStop(0.2, CYAN);
+      fGrad.addColorStop(0.6, "#ff880099");
+      fGrad.addColorStop(1, "transparent");
+      ctx.fillStyle = fGrad;
+      ctx.beginPath();
+      ctx.moveTo(fx - flameW, py + ph - 2);
+      ctx.quadraticCurveTo(fx, py + ph + flameH + 14, fx + flameW, py + ph - 2);
+      ctx.closePath();
+      ctx.fill();
+    }
 
-    ctx.fillStyle = "#0d1f2d";
+    // Ship body — modern curved hull
+    const bodyGrad = ctx.createLinearGradient(pcx, py, pcx, py + ph);
+    bodyGrad.addColorStop(0, "#0a2a3a");
+    bodyGrad.addColorStop(0.5, "#0d1f2d");
+    bodyGrad.addColorStop(1, "#061218");
+    ctx.fillStyle = bodyGrad;
     ctx.strokeStyle = CYAN;
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.moveTo(pcx, py);
-    ctx.lineTo(px + pw * 0.85, py + ph * 0.7);
-    ctx.lineTo(px + pw, py + ph);
-    ctx.lineTo(px + pw * 0.6, py + ph * 0.75);
-    ctx.lineTo(pcx, py + ph * 0.65);
-    ctx.lineTo(px + pw * 0.4, py + ph * 0.75);
-    ctx.lineTo(px, py + ph);
-    ctx.lineTo(px + pw * 0.15, py + ph * 0.7);
+    ctx.quadraticCurveTo(px + pw * 0.9, py + ph * 0.3, px + pw, py + ph * 0.85);
+    ctx.quadraticCurveTo(px + pw * 0.75, py + ph * 0.9, px + pw * 0.6, py + ph * 0.8);
+    ctx.lineTo(px + pw * 0.4, py + ph * 0.8);
+    ctx.quadraticCurveTo(px + pw * 0.25, py + ph * 0.9, px, py + ph * 0.85);
+    ctx.quadraticCurveTo(px + pw * 0.1, py + ph * 0.3, pcx, py);
     ctx.closePath();
     ctx.fill();
     ctx.stroke();
 
-    const cpGrad = ctx.createRadialGradient(pcx, py + ph * 0.3, 2, pcx, py + ph * 0.3, 12);
-    cpGrad.addColorStop(0, "#00f5ff88");
+    // Wing accents
+    ctx.strokeStyle = CYAN + "66";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(pcx, py + ph * 0.15);
+    ctx.lineTo(px + pw * 0.85, py + ph * 0.55);
+    ctx.moveTo(pcx, py + ph * 0.15);
+    ctx.lineTo(px + pw * 0.15, py + ph * 0.55);
+    ctx.stroke();
+
+    // Cockpit glow
+    const cpGrad = ctx.createRadialGradient(pcx, py + ph * 0.28, 2, pcx, py + ph * 0.28, 14);
+    cpGrad.addColorStop(0, CYAN + "cc");
+    cpGrad.addColorStop(0.5, CYAN + "33");
     cpGrad.addColorStop(1, "transparent");
     ctx.fillStyle = cpGrad;
     ctx.beginPath();
-    ctx.ellipse(pcx, py + ph * 0.3, 9, 14, 0, 0, Math.PI * 2);
+    ctx.ellipse(pcx, py + ph * 0.28, 8, 12, 0, 0, Math.PI * 2);
     ctx.fill();
-    ctx.strokeStyle = CYAN + "99";
-    ctx.lineWidth = 1;
-    ctx.stroke();
 
+    // Wing tip lights (pulsing)
+    const wingPulse = 0.6 + Math.sin(w.time * 6) * 0.4;
     ctx.fillStyle = CYAN;
-    ctx.shadowBlur = 8;
-    ctx.beginPath(); ctx.arc(px + pw * 0.15, py + ph * 0.65, 3, 0, Math.PI * 2); ctx.fill();
-    ctx.beginPath(); ctx.arc(px + pw * 0.85, py + ph * 0.65, 3, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = (inv ? 0.3 : 1) * wingPulse;
+    ctx.shadowBlur = 12;
+    ctx.beginPath(); ctx.arc(px + 4, py + ph * 0.78, 3.5, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(px + pw - 4, py + ph * 0.78, 3.5, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = inv ? 0.3 : 1;
 
     ctx.restore();
 
@@ -634,23 +715,63 @@ export default function GameCanvas({
       ctx.restore();
     }
 
-    // Fire button (always show on touch devices)
+    // Mobile controls (always show on touch devices)
     if ("ontouchstart" in window) {
+      // Joystick base hint (left side)
+      if (!touch.joystick) {
+        ctx.save();
+        ctx.globalAlpha = 0.15;
+        ctx.strokeStyle = CYAN;
+        ctx.lineWidth = 2;
+        ctx.setLineDash([8, 8]);
+        ctx.beginPath();
+        ctx.arc(100, H - 120, 55, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.globalAlpha = 0.1;
+        ctx.fillStyle = CYAN;
+        ctx.beginPath();
+        ctx.arc(100, H - 120, 20, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+
+      // Fire button (larger, better positioned)
       ctx.save();
-      const fbx = W - 70, fby = H - 100, fbr = 35;
-      ctx.globalAlpha = touch.firing ? 0.6 : 0.25;
-      ctx.fillStyle = RED;
-      ctx.shadowColor = RED;
-      ctx.shadowBlur = touch.firing ? 20 : 8;
+      const fbx = W - 80, fby = H - 120, fbr = 45;
+      // Outer ring
+      ctx.globalAlpha = touch.firing ? 0.5 : 0.15;
+      ctx.strokeStyle = CYAN;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(fbx, fby, fbr + 8, 0, Math.PI * 2);
+      ctx.stroke();
+      // Inner fill
+      const fbGrad = ctx.createRadialGradient(fbx, fby, 0, fbx, fby, fbr);
+      fbGrad.addColorStop(0, touch.firing ? CYAN + "88" : CYAN + "22");
+      fbGrad.addColorStop(1, touch.firing ? CYAN + "44" : CYAN + "08");
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = fbGrad;
       ctx.beginPath();
       ctx.arc(fbx, fby, fbr, 0, Math.PI * 2);
       ctx.fill();
-      ctx.globalAlpha = touch.firing ? 1 : 0.6;
+      ctx.strokeStyle = CYAN;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      // Crosshair icon
+      ctx.globalAlpha = touch.firing ? 1 : 0.5;
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(fbx, fby - 14); ctx.lineTo(fbx, fby - 6);
+      ctx.moveTo(fbx, fby + 6); ctx.lineTo(fbx, fby + 14);
+      ctx.moveTo(fbx - 14, fby); ctx.lineTo(fbx - 6, fby);
+      ctx.moveTo(fbx + 6, fby); ctx.lineTo(fbx + 14, fby);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(fbx, fby, 3, 0, Math.PI * 2);
       ctx.fillStyle = "#fff";
-      ctx.font = "bold 14px 'Orbitron', monospace";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText("FIRE", fbx, fby);
+      ctx.fill();
       ctx.restore();
     }
 
@@ -720,8 +841,8 @@ export default function GameCanvas({
         const x = (t.clientX - rect.left) * (canvas.width / rect.width);
         const y = (t.clientY - rect.top) * (canvas.height / rect.height);
 
-        // Right side = fire button
-        if (x > W * 0.6) {
+        // Right side = fire button (generous touch area)
+        if (x > W * 0.55) {
           touchRef.current.firing = true;
           touchRef.current.fireId = t.identifier;
         } else {

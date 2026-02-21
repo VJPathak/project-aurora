@@ -124,15 +124,26 @@ export function useGameAudio() {
     osc(ctx, masterRef.current!, "sawtooth", 180, 0.3, t, 0.3, 60);
   }, [getCtx]);
 
-  /** Level up fanfare */
-  const sfxLevelUp = useCallback(() => {
+  /** Level up fanfare — intensity scales with level */
+  const sfxLevelUp = useCallback((level = 1) => {
     if (muted.current) return;
     const ctx = getCtx();
     const t = ctx.currentTime;
-    const melody = [523.3, 659.3, 783.99, 1046.5];
+    // More notes and higher pitch for higher levels
+    const baseNotes = [523.3, 659.3, 783.99, 1046.5];
+    const extraNotes = level >= 3 ? [1318.5] : [];
+    const extraNotes2 = level >= 5 ? [1568] : [];
+    const melody = [...baseNotes, ...extraNotes, ...extraNotes2];
+    const vol = Math.min(0.25, 0.15 + level * 0.012);
     melody.forEach((freq, i) => {
-      osc(ctx, masterRef.current!, "square", freq, 0.18, t + i * 0.1, 0.15);
+      osc(ctx, masterRef.current!, "square", freq, vol, t + i * 0.08, 0.14);
     });
+    // Add a victory chord on higher levels
+    if (level >= 4) {
+      osc(ctx, masterRef.current!, "sine", 440, 0.08, t + melody.length * 0.08, 0.4);
+      osc(ctx, masterRef.current!, "sine", 554.4, 0.08, t + melody.length * 0.08, 0.4);
+      osc(ctx, masterRef.current!, "sine", 659.3, 0.08, t + melody.length * 0.08, 0.4);
+    }
   }, [getCtx]);
 
   /** Triple shot unlock */
@@ -163,6 +174,17 @@ export function useGameAudio() {
     const t = ctx.currentTime;
     osc(ctx, masterRef.current!, "sawtooth", 300, 0.06, t, 0.12, 80);
   }, [getCtx]);
+
+  /** Set music intensity based on game level (1-10 scale) */
+  const setMusicLevel = useCallback((level: number) => {
+    if (!acRef.current || !masterRef.current) return;
+    // Increase arp and hihat volumes as level rises
+    const intensity = Math.min(level / 8, 1);
+    masterRef.current.gain.setValueAtTime(
+      muted.current ? 0 : 0.45 + intensity * 0.25,
+      acRef.current.currentTime
+    );
+  }, []);
 
   // ── Background music ──────────────────────────────────────────────────────
   const startMusic = useCallback(() => {
@@ -322,6 +344,7 @@ export function useGameAudio() {
     sfxEnemyShoot,
     startMusic,
     stopMusic,
+    setMusicLevel,
     toggleMute,
     isMuted: () => muted.current,
   };
