@@ -45,6 +45,7 @@ export default function Index() {
     sfxLevelUp:    audio.sfxLevelUp,
     sfxGameOver:   audio.sfxGameOver,
     sfxEnemyShoot: audio.sfxEnemyShoot,
+    setMusicLevel: audio.setMusicLevel,
   };
 
   return (

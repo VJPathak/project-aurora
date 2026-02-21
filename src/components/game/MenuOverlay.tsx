@@ -161,6 +161,22 @@ export default function MenuOverlay({ type, score = 0, onStart, onResume }: Menu
             </div>
           </div>
         )}
+
+        {/* Developer credits */}
+        {isMenu && (
+          <div className="flex flex-col items-center gap-1 mt-4 text-center">
+            <p className="text-xs" style={{ color: "hsl(var(--muted-foreground))", opacity: 0.7 }}>
+              Developed by <span style={{ color: "hsl(var(--neon-cyan))" }} className="font-bold">VJP</span> with ❤️
+            </p>
+            <a
+              href="mailto:vashishth.techsolutions@gmail.com"
+              className="text-xs underline hover:no-underline transition-colors"
+              style={{ color: "hsl(var(--neon-gold)/0.7)" }}
+            >
+              vashishth.techsolutions@gmail.com
+            </a>
+          </div>
+        )}
       </div>
     </div>
   );
